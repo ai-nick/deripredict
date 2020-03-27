@@ -73,9 +73,11 @@ def run_live_predict(trained_model, step = 1, future_target = 0):
   hist_wrapper = deribit_wrapper.DeribitWrapper()
   BATCH_SIZE = 1
   df = hist_wrapper.fetch_chart_data(days_lookback=1)
-  feature_cols = ["volume", "spread_2", "spread"]   
+  feature_cols = ["volume", "spread_roc", "spread"]   
   df["spread"] = df["high"] - df["low"]
-  df["spread_2"] = df["open"] - df["close"]
+  df["spread_roc"] = df["spread"].rolling(window=55).mean()
+  df.dropna(inplace=True)
+  print(df.iloc[-1])
   features = df[feature_cols].values 
   #print(features[-1])
   means = features.mean(axis=0)
@@ -94,8 +96,14 @@ def run_live_predict(trained_model, step = 1, future_target = 0):
     prediction = trained_model.predict(x)[0]
     denormed = (prediction * stds[2]) + means[2]
     target_denorm = (y_val_single[-1] * stds[2]) + means[2]
-    print(denormed, target_denorm)
-    factor = (target_denorm - denormed) / target_denorm  
+    last_spread = 0.0
+    i = 1
+    while last_spread == 0.0:
+      last_spread = df["spread"].iloc[-i]
+      i += 1
+    factor = (last_spread - denormed) / last_spread
+    if factor < 0.0:
+      factor = factor * -1  
   return factor
 
 
@@ -104,15 +112,16 @@ def get_predictor(STEP = 1, future_target = 5):
   BUFFER_SIZE = 455
   BATCH_SIZE = 255
   EVALUATION_INTERVAL = 20
-  EPOCHS = 21
+  EPOCHS = 16
   tf.random.set_seed(13)
 
-  feature_cols = ["volume", "spread_2", "spread"]
+  feature_cols = ["volume", "spread_roc", "spread"]
   hist_wrapper = deribit_wrapper.DeribitWrapper()
 
   df = hist_wrapper.fetch_chart_data()
   df["spread"] = df["high"] - df["low"]
-  df["spread_2"] = df["open"] - df["close"] 
+  df["spread_roc"] = df["spread"].rolling(window=55).mean()
+  df.dropna(inplace=True)
   features = df[feature_cols].values
   means = features.mean(axis=0)
   stds = features.std(axis=0)
@@ -139,8 +148,9 @@ def get_predictor(STEP = 1, future_target = 5):
 
   # setup model
   single_step_model = tf.keras.models.Sequential()
-  single_step_model.add(tf.keras.layers.LSTM(89,
+  single_step_model.add(tf.keras.layers.LSTM(21, return_sequences=True,
                                             input_shape=x_train_single.shape[-2:]))
+  single_step_model.add(tf.keras.layers.LSTM(13))
   single_step_model.add(tf.keras.layers.Dense(1))
 
   single_step_model.compile(optimizer=tf.keras.optimizers.RMSprop(), loss='mae')
@@ -149,19 +159,19 @@ def get_predictor(STEP = 1, future_target = 5):
                                               steps_per_epoch=EVALUATION_INTERVAL,
                                               validation_data=val_data_single,
                                               validation_steps=50)
-  
+  '''
   for x, y in val_data_single.take(1):
     predicted = single_step_model.predict(x)[0]
     plot = show_plot([x[0][:, 1].numpy(), y[0].numpy(),
                       predicted], 1,
                     'Single Step Prediction')
     plot.show()
-    
+  '''
   return single_step_model
 
 def prediction_service(predictors={}):
   predictions = {}
-  if predictors = {}:
+  if predictors == {}:
     predictors["1m"] = {
         "model" : get_predictor(1, 1),
         "step" : 1,
@@ -174,7 +184,11 @@ def prediction_service(predictors={}):
     } 
   for p in predictors:
     p_dict = predictors[p]
-    predictions{p} = run_live_predict(p_dict["model"], p_dict["step"])
+    predictions[p] = run_live_predict(p_dict["model"], p_dict["step"])
+  resp = requests.post("http://jare.cloud:8081/predictions", data=predictions)
+  print(resp)
+  time.sleep(90)
+  prediction_service(predictors=predictors)
 
 prediction_service()
 
