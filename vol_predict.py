@@ -104,7 +104,7 @@ def run_live_predict(trained_model, step = 1, future_target = 0):
     factor = (last_spread - denormed) / last_spread
     if factor < 0.0:
       factor = factor * -1  
-  return factor
+  return factor / 10
 
 
 def get_predictor(STEP = 1, future_target = 5):
